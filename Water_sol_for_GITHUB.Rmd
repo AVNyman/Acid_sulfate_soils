@@ -1,0 +1,705 @@
+---
+title: "Water_soluble_and_acidity"
+author: "Alex"
+date: "2024-06-13"
+output: html_document
+---
+
+
+```{r library}
+library(tidyr)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+#Additionally has funcitons like "clean_names"
+library(janitor)
+#Additionally has functions for ggplot, such as "facet_wrap_paginate"
+library(ggforce)
+library(factoextra)
+library(ggsignif) #Helps add significance relationships
+library(GGally)
+#To reshape the HCL_Water table
+library(reshape2)
+
+```
+
+###Data cleaning of the original excel files
+```{r data cleanin}
+
+#Import the files
+#2022_water_extract is the one with the water soluble concentrations for all analyzed sites
+#Acidity_Final is the one with the acidity measurements for all analyzed sites
+#Geochemistry2B contains the HCL and Aqua Regia (AR) concentrations
+#Site_summary contains the north-south area division, for merging with the water-extracts
+
+###Precleaning of Water sol
+Water_sol_all <- X2022_water_extract[-c(1,184:185), -c(1,3,4)]
+colnames(Water_sol_all) <- c("Site", "Triplicate", "Layer", "Treatment", "Al", "As", "B", "Ba", "Be", "Ca", "Cd", "Co", "Cr", "Cu", "Fe", "Hg", "K","Mg", "Mn","Mo", "Na", "Ni", "P", "Pb", "S", "Sb", "Se", "Si", "Sn", "Sr", "Tl", "U", "V", "Zn")
+Water_sol_all
+
+Water_sol <- Water_sol_all %>%
+  select(1:4, sort(current_vars()))
+Water_sol$Layer <- sapply(Water_sol$Layer, as.character)
+Water_sol$Layer <- paste(Water_sol$Layer, Water_sol$Treatment)
+Water_sol
+Water_sol_selected <- Water_sol[,c("Site", "Triplicate", "Layer", "Al", "As", "Cd", "Co", "Cr", "Cu", "Fe", "Mn", "Ni", "Pb", "S", "Zn")]
+Water_sol_selected[Water_sol_selected$Triplicate == "A+B+C",2] = "A"
+Water_sol_selected[Water_sol_selected$Triplicate == "ABC",2] = "A"
+Water_sol_selected[Water_sol_selected$Triplicate == "A+B",2] = "A"
+#manually remove S18 RZ and TZ, since it's not hypersulfidic material
+Water_sol_selected <- Water_sol_selected[-c(113, 91 ,168:169),]
+Water_sol_selected[Water_sol_selected$Site == "S18",]
+
+
+###Cleaning Acidity
+Acidity <- Acidity_Final[-c(163:168),-c(1:3, 7, 11, 12)] #nr 9 is the acidity for pH 5.5 mmol, in case you want it back
+Acidity
+colnames(Acidity)[1:6] = c("Site", "Layer", "Triplicate", "Treatment", "Acidity1", "Acidity")
+Acidity$Layer <- paste(Acidity$Layer, Acidity$Treatment)
+Acidity$Layer <- gsub("1 Non-inc", "1 No", Acidity$Layer)
+Acidity$Layer <- gsub("2 Non-inc", "2 No", Acidity$Layer)
+Acidity$Layer <- gsub("2 Incubated", "2 Yes", Acidity$Layer)
+Acidity$Layer <- gsub("3 Incubated", "3 Yes", Acidity$Layer)
+Acidity <- Acidity[! duplicated(Acidity[,1:4]),]
+Acidity
+#remove S18
+Acidity <- Acidity[-c(128:131),]
+Acidity[Acidity$Triplicate == "A+B+C",3] = "A"
+Acidity[Acidity$Triplicate == "ABC",3] = "A"
+Acidity[Acidity$Triplicate == "A+B",3] = "A"
+Acidity[Acidity$Triplicate == "A+C",3] = "A"
+Acidity
+
+#Basic statistics, median, minimum and maximum values extracted
+Acidity
+Acidity_summary <- Acidity[,c(2,5,6)] %>%
+  group_by(Layer) %>%
+  summarise_each(funs(median(., na.rm = TRUE), min(., na.rm = TRUE), max(., na.rm = TRUE)))
+write.csv(Acidity_summary, "Acidity_summary_med.csv")
+
+
+###Combine Acidity and Water_sol_selected
+Water_sol_selected <- full_join(Water_sol_selected, Acidity, by = c("Site", "Layer", "Triplicate"))
+Water_sol_selected$treatment2 <- Water_sol_selected$Layer
+Water_sol_selected$treatment2 <- gsub("1 No", "Non-incubated", Water_sol_selected$treatment2)
+Water_sol_selected$treatment2 <- gsub("2 No", "Non-incubated", Water_sol_selected$treatment2)
+Water_sol_selected$treatment2 <- gsub("2 Yes", "Incubated", Water_sol_selected$treatment2)
+Water_sol_selected$treatment2 <- gsub("3 Yes", "Incubated", Water_sol_selected$treatment2)
+Water_sol_selected <-  Water_sol_selected[,-16]
+colnames(Water_sol_selected)[18] <- "Treatment"
+Water_sol_selected <- Water_sol_selected[!duplicated(Water_sol_selected[,1:4]),]
+
+
+#Water and acidity in long format
+WALONG <- Water_sol_selected %>%
+  gather(key = "Element", value = "mgKg", -"Triplicate", -"Treatment", -"Acidity1", -"Site", -"Layer")
+
+WALONG$Layer <- gsub("1 No", "SUL", WALONG$Layer)
+WALONG$Layer <- gsub( "2 No", "TZ", WALONG$Layer)
+WALONG$Layer <- gsub( "2 Yes", "TZ (inc)",WALONG$Layer)
+WALONG$Layer <- gsub("3 Yes", "HYP",WALONG$Layer)
+
+#Water in long format, with acidity as a separate column
+WALONG2 <- Water_sol_selected %>%
+  gather(key = "Element", value = "mgKg", -"Triplicate", -"Site", -"Treatment", -"Layer", -"Acidity1", -"Acidity")
+WALONG2
+
+
+##### HCL 
+HCL_upd <- Geochemistry2B_HCL
+HCL_upd <- HCL_upd[-c(1,2,201:269), -c(1,2,4,7)]
+colnames(HCL_upd)[1:3] <- c("Triplicate", "Site", "Layer") 
+HCL_upd <- HCL_upd %>%
+  separate(Triplicate, c("deleteme", "Triplicate"), -1)
+HCL_upd <- HCL_upd[,c("Triplicate", "Site", "Layer", "Al", "As", "Cd", "Co", "Cr", "Cu", "Fe", "Mn", "Ni", "Pb", "S", "Zn")]
+HCL_upd[,4:15] <- lapply(HCL_upd[,4:15], as.numeric)
+HCL_upd
+
+#### Aqua Regia
+
+AR <- Geochemistry2B_Aqua[-c(1,2, 201:223),c(3,5,9, 35)]
+colnames(AR) <-  c("Temp", "Site", "Layer", "S")
+AR <- separate(AR, "Temp", into = c("Triplicate", "deleteme"), "_")
+AR <- separate(AR, "Triplicate", into = c("deleteme", "Triplicate"), -1)
+AR <- AR[,-1]
+AR[,c(4)] <- sapply(AR[,c(4)], as.numeric)
+AR
+#Remember to always remove S18
+
+
+#### Site summary
+Site_Sum <- Site_Summary[,c(1,2,3)]
+colnames(Site_Sum)[1:3] <- c("Site", "Area", "Area_complex")
+
+```
+
+###FIGURES###
+#Fig5
+```{r N-s plot}
+
+WALONG
+WALONG$Element <- gsub("Acidity", "Acidity (mmol H+ /kg)", WALONG$Element) 
+
+level_order <- c("SUL", "TZ", "TZ (inc)", "HYP")
+Site_order <- c("S01", "", "", "", "S05", "", "", "", "S09", "", "", "", "S13", "", "", "", "S17", "", "", "", "S21", "")
+
+ggplot(WALONG, aes(x=Site, y=mgKg, color = factor(Layer, level = level_order), group = factor(Layer, level = level_order)))+
+  geom_point()+
+  scale_x_discrete(labels = Site_order)+
+  facet_wrap(.~ Element, nrow = 5, ncol = 3, scales = "free")+
+  scale_color_manual("Layer",limits = c("SUL", "TZ", "TZ (inc)", "HYP"), labels = c("Oxidized zone", "Transition zone", "Transition zone (incubated)", "Reduced zone (incubated)"), values = c( "firebrick", "darkgoldenrod2", "olivedrab3", "dodgerblue3"))+
+  theme(legend.position = c(0.5, 0.1),
+        legend.text = element_text(size = 18),
+        legend.title = element_text(size = 20),
+        axis.text = element_text(size = 12),
+        strip.text.x = element_text(size = 14),
+        axis.title = element_text(size = 14),
+        legend.key.size = unit(2.5, "line"))
+
+ggsave("Site_plots_water_sol.png", height = 40, width = 30, units = "cm")
+
+```
+#FIG1
+#The water soluble boxplot for 3B FIG1
+```{r BOXPLOTS all elements and acidity}
+
+AS <- WALONG[WALONG$Element == "As",]
+AS
+median(AS[AS$Layer == "TZ (inc)",]$mgKg, na.rm = TRUE)
+median(Water_sol_selected[Water_sol_selected$Layer == "2 Yes",]$As, na.rm = TRUE)
+
+level_order <- c("SUL", "TZ", "TZ (inc)", "HYP")
+
+WALONG
+ggplot(WALONG, aes(x= factor(Layer, level = level_order), y=mgKg))+
+  geom_boxplot( aes(color = Layer, group = Layer))+
+  scale_y_log10(breaks = c(0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000), labels = c(0.001,  0.01, 0.1, 1, 10, 100,  1000, 10000))+
+  #geom_jitter(aes(color = Layer, group = Layer))+
+  geom_signif(comparisons = list(c("SUL", "TZ"), c("SUL", "TZ (inc)"), c("SUL", "HYP"), c("TZ", "TZ (inc)"), c("TZ", "HYP"), c("TZ (inc)", "HYP")), map_signif_level =c(TRUE, " " = 0.001, " " =0.01, " " = 0.05), step_increase = 0.1, vjust = 0.7)+
+  ylab("mg/Kg")+
+  xlab("")+
+  facet_wrap(.~Element, nrow = 7, ncol = 3, scales = "free")+
+  theme(axis.title = element_text(size = 14),
+        legend.text = element_text(size = 18),
+        axis.text = element_text(size = 12),
+        legend.title = element_text(size = 20),
+        strip.text.x = element_text(size = 14),
+        legend.position = c(0.5, 0.08),
+        legend.key.size = unit(2.5, "line"))+
+  scale_color_manual("Zone",limits = c("SUL", "TZ", "TZ (inc)", "HYP"), labels = c("Oxidized zone", "Transition zone", "Transition zone (incubated)", "Reduced zone (incubated)"), values = c( "firebrick", "darkgoldenrod2", "olivedrab3", "dodgerblue3"))
+
+#Note, you have to manually input the significance stars in an image editor based on the results of the ANOVA further down (can't figure out how to get ggplot to do it for me)
+
+ggsave("Water_Select_BOX_Log_X.png", width = 33, height = 45, unit = "cm")
+
+
+```
+#Fig6
+#Acidity METALS 3B FIG6
+```{r Acidity vs. vattenlösliga metaller}
+
+#WALONG = for boxplots (Acidity is part of long). WALONG2 = for acidity vs. elements (Acidity is wide)
+
+WALONG2
+
+ggplot(na.omit(WALONG2), aes(x=Acidity, y=mgKg, color = Layer, shape = Layer))+
+  geom_point()+
+  facet_wrap(.~Element, nrow= 4, ncol = 3, scales = "free")+
+  scale_x_log10()+
+  scale_y_log10()+
+  xlab("Acidity (mmol H+/Kg)")+
+  ylab("mg/Kg")+
+  scale_color_manual("Zone", labels = c("Oxidized zone", "Transition zone", "Transition zone (incubated)", "Reduced zone (incubated)"), values = c("firebrick", "darkgoldenrod2", "olivedrab3", "dodgerblue3"), na.translate = F)+
+    theme(axis.title = element_text(size = 14),
+        legend.text = element_text(size = 13),
+        axis.text = element_text(size = 12),
+        legend.title = element_text(size = 15),
+        strip.text.x = element_text(size = 14),
+        legend.key.size = unit(1.8, "line"))+
+  scale_shape_manual("Zone", labels = c("Oxidized zone", "Transition zone", "Transition zone (incubated)", "Reduced zone (incubated)"), values = c(16, 17, 18, 15))
+
+ggsave("Acidity_Water.png", width = 30, height = 35, units = "cm")
+
+
+
+```
+#Fig2
+#Total Sulfur vs. Acidity point correlation plot to 3B
+```{r viz Acidity vs. AR S }
+
+#Use AR S means for the transition layers
+AR[AR$Layer=="2",]
+Aqua_S_TZ_match <- AR[AR$Layer=="2",c(2,4)] %>%
+  group_by(Site) %>%
+  summarise_each(funs(mean(., na.rm = TRUE)))
+#Remove S18
+Aqua_S_TZ_match <- Aqua_S_TZ_match[-18,]
+
+#merge acidity and aqua regia S
+AR
+Acidity
+Acidity2 <- Acidity
+Acidity2$Layer <- gsub("1 No", "1", Acidity2$Layer)
+Acidity2$Layer <- gsub("2 No", "2", Acidity2$Layer)
+Acidity2$Layer <- gsub("2 Yes", "2", Acidity2$Layer)
+Acidity2$Layer <- gsub("3 Yes", "3", Acidity2$Layer)
+
+Acidity2
+
+Acidity_AR_S <- left_join(Acidity2, AR, by = c("Site", "Triplicate", "Layer"))
+Acidity_AR_S <- left_join(Acidity_AR_S, Aqua_S_TZ_match, by = "Site")
+Acidity_AR_S <- Acidity_AR_S %>%
+  mutate(S.x = coalesce(S.x, S.y))
+
+#Fix the Layer column
+Acidity_AR_S
+Acidity_AR_S <- Acidity_AR_S[,-c(5,8)]
+Acidity_AR_S$Layer <- paste(Acidity_AR_S$Layer, Acidity_AR_S$Treatment)
+Acidity_AR_S
+
+#Remove the duplicates
+Acidity_AR_S <- na.omit(Acidity_AR_S[!duplicated(Acidity_AR_S[,c("Site", "Layer", "Triplicate")]),])
+#The S.y Is just the average for the TZ, to fill out the "empty" slots for TZ (After letjoin wihch didn't take it into account)
+Acidity_AR_S
+#Change S into percentage
+Acidity_AR_S[,6] <- Acidity_AR_S[,6]/10000
+
+#IDK. SOmething with the orders
+facet_names <- list(
+  '1 Non-inc' = 'OZ',
+  '2 Non-inc' = 'Non-incubate TZ',
+  '2 Incubated' = 'Incubated TZ',
+  '3 Incubated' = 'RZ'
+)
+Acidity_AR_S$Treatment <- gsub("Non-inc", "Non-incubated", Acidity_AR_S$Treatment)
+Acidity_AR_S
+Acidity_AR_S$Treatment <- factor(Acidity_AR_S$Treatment, levels = c("Non-incubated","Incubated"))
+Acidity_AR_S$Layer <- factor(Acidity_AR_S$Layer, levels = c("1 Non-inc", "2 Non-inc", "2 Incubated","3 Incubated"))
+
+#Change the names
+colnames(Acidity_AR_S)[6] <- "Sulfur"
+
+ggplot(Acidity_AR_S, aes(x=Sulfur, y=Acidity, group = Layer, color = Layer))+
+  geom_point()+
+  facet_wrap(.~Treatment, ncol = 4, nrow = 1, scales = "free")+
+  scale_color_manual("Zone", labels = c("Oxidized zone", "Transition zone", "Transition zone (incubated)", "Reduced zone (incubated)"), values = c( "firebrick", "darkgoldenrod2", "olivedrab3", "dodgerblue3"))+
+  ylab("Acidity (mmol H+/Kg)")+
+  xlab("Total Sulfur (%)")
+ggsave("AR_SULFUR_VS_ACIDITY_Treatment_split_Acidity2.png", width = 20, height = 10, units = "cm")
+
+Acidity_AR_S
+cor.test(Acidity_AR_S[Acidity_AR_S$Layer == "1 Non-inc",]$Sulfur, Acidity_AR_S[Acidity_AR_S$Layer == "1 Non-inc",]$Acidity, method = "spearman")
+cor.test(Acidity_AR_S[Acidity_AR_S$Layer == "2 Non-inc",]$Sulfur, Acidity_AR_S[Acidity_AR_S$Layer == "2 Non-inc",]$Acidity, method = "spearman")
+cor.test(Acidity_AR_S[Acidity_AR_S$Layer == "2 Incubated",]$Sulfur, Acidity_AR_S[Acidity_AR_S$Layer == "2 Incubated",]$Acidity, method = "spearman")
+cor.test(Acidity_AR_S[Acidity_AR_S$Layer == "3 Incubated",]$Sulfur, Acidity_AR_S[Acidity_AR_S$Layer == "3 Incubated",]$Acidity, method = "spearman")
+
+
+```
+
+#Fig 3
+#S vs total S for Table 2
+#Sidenote of S vs S ration #FIG 3. and #Table 2
+```{r water S vs AR S}
+
+Sulfur <- Water_sol_selected[,c(1:3,14,18)]
+Sulfur <- left_join(Sulfur, Acidity_AR_S, by = c("Site","Layer", "Triplicate"))
+#Sulfur is AR Sulfur, and S is water soluble S
+Sulfur <- Sulfur[!duplicated(Sulfur[,c("Site", "Layer", "Triplicate")]),]
+#Create the ratio between AR and water-sol S. Because AR S is in percentage, we need to divide by 10 000 to also put water sol in percentage
+Sulfur$Ratio <- ((Sulfur$S/10000) / Sulfur$Sulfur)*100
+Sulfur
+
+#########
+#THis is for Table 2
+
+#Correlation test between water-sol sulfur (S) and Aqua regia sulfur (Sulfur)
+#Does it matter if they are different units? One is mg/Kg one is percentage... It shouldn't matter, I think
+cor.test(Sulfur[Sulfur$Layer == "3 Yes",]$S, Sulfur[Sulfur$Layer == "3 Yes",]$Sulfur, method = "spearman")
+cor.test(Sulfur[Sulfur$Layer == "2 Yes",]$S, Sulfur[Sulfur$Layer == "2 Yes",]$Sulfur, method = "spearman")
+cor.test(Sulfur[Sulfur$Layer == "2 No",]$S, Sulfur[Sulfur$Layer == "2 No",]$Sulfur, method = "spearman")
+cor.test(Sulfur[Sulfur$Layer == "1 No",]$S, Sulfur[Sulfur$Layer == "1 No",]$Sulfur, method = "spearman")
+#Conclusion, all are high (>0.5), with low p (<0.05), which means they correlate. Visible here:
+
+ggplot(Sulfur, aes(x = S, y = Sulfur, color = Layer))+
+  geom_point()
+
+Sulfur
+quantile(Sulfur[Sulfur$Layer == "3 Yes",]$Ratio, na.rm = TRUE)
+quantile(Sulfur[Sulfur$Layer == "2 Yes",]$Ratio, na.rm = TRUE)
+quantile(Sulfur[Sulfur$Layer == "2 No",]$Ratio, na.rm = TRUE)
+quantile(Sulfur[Sulfur$Layer == "1 No",]$Ratio, na.rm = TRUE)
+
+
+#This is the same as above, but instead of doing them one at a time, I've used pipe to make it into one calculation. Although it doesn't work for quantiles.
+#S_S_Spearman <- S_S[,-c(1,3,7)] %>%
+#  group_by(Layer, Treatment)%>%
+#  summarise_each(funs(spearman_RHO = cor.test(S, Sulfur_AR, method = "spearman", exact = FALSE)$estimate, spearman_P = cor.test(S, Sulfur_AR, exact = FALSE, #method = "spearman")$p.val))
+
+
+#####Key plots####
+
+#Ratio vs. Aqua Regia sulfur
+ggplot(Sulfur, aes(y=Ratio, x=Sulfur, color=Layer, shape = Treatment.x))+
+  geom_point()+
+  scale_x_log10()
+ggsave("S_S_A.png", units = "cm", height=15, width = 15)
+
+Sulfur
+Sulfur[,c(3,5,7,8,9)]
+
+Sulfur_long <- Sulfur[,c(3,5,7,8,9)]%>%
+  gather(key = "Method", value = "value", -"Layer", -"Treatment.x", -"Ratio")
+Sulfur_long
+
+Sulfur_long$Method <- gsub("Sulfur", "Total Sulfur (mg/Kg)", Sulfur_long$Method) 
+Sulfur_long$Method <- gsub("Acidity", "Acidity (mmol H+/Kg)", Sulfur_long$Method) 
+
+
+##### THIS IS FIG 3 ############
+Sulfur_long
+ggplot(Sulfur_long, aes(x=value, y=Ratio, color=Layer))+
+  geom_point()+
+  facet_wrap(.~Method, ncol = 2, nrow = 1, scales = "free")+
+  ylab("S(water) / S(total) * 100")+
+  xlab("mmol H+/Kg                                                         mg/Kg ")+
+  scale_color_manual("Zone", labels = c("Oxidized zone", "Transition zone", "Transition zone (incubated)", "Reduced zone (incubated)"), values = c("firebrick", "darkgoldenrod2", "olivedrab3", "dodgerblue3"), na.translate = F)+
+  scale_shape_manual("Zone", labels = c("Oxidized zone", "Transition zone", "Transition zone (incubated)", "Reduced zone (incubated)"), values = c(16, 17, 18, 15))
+
+ggsave("SRatios.png", units = "cm", height=10, width = 25)
+
+
+cor.test(Sulfur[Sulfur$Layer == "3 Yes",]$Acidity, Sulfur[Sulfur$Layer == "3 Yes",]$Sulfur, method = "spearman")
+cor.test(Sulfur[Sulfur$Layer == "2 Yes",]$Acidity, Sulfur[Sulfur$Layer == "2 Yes",]$Sulfur, method = "spearman")
+cor.test(Sulfur[Sulfur$Layer == "2 No",]$Acidity, Sulfur[Sulfur$Layer == "2 No",]$Sulfur, method = "spearman")
+cor.test(Sulfur[Sulfur$Layer == "1 No",]$Acidity, Sulfur[Sulfur$Layer == "1 No",]$Sulfur, method = "spearman")
+
+```
+#Fig4
+#Fe vs S graph + spearman 3B FIG3
+```{r R Fe vs S}
+
+na.omit(Water_sol_selected[Water_sol_selected$Layer == "2 Yes",])
+factor_level <- c("Non-incubated", "Incubated")
+
+################# water sol vs water sol ##########
+
+ggplot(Water_sol_selected, aes(x=S, y=Fe, color = Layer))+
+  geom_point()+
+  facet_wrap(.~factor(Treatment, levels = factor_level), nrow = 1, ncol = 3)+
+   # scale_x_continuous(trans='log10', breaks = c(100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 20000, 30000), labels = c(100, "", 300, "", "", "", "","","", 1000,"",3000,"", "","","","","", 10000,"", 30000))+
+#  scale_y_continuous(trans='log10', breaks = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000), labels = c(1, "", 3, "", "", "", "", "", "", 10, "", 30, "", "", "", "", "", "", 100, "", "300", "", "", "", "","","", 1000,"",3000,"", "","","","","", 10000))+
+  scale_x_log10()+
+  scale_y_log10()+
+  scale_color_manual("Zone", labels = c("Oxidized zone", "Transition zone", "Transition zone (incubated)", "Reduced zone (incubated)"), values = c("firebrick", "darkgoldenrod2", "olivedrab3", "dodgerblue3"), na.translate = F)+
+  xlab("Sulfur (mg/Kg)")+
+  ylab("Iron (mg/Kg)")
+
+ggsave("S_vsFe.png", width = 20, height = 10, units = "cm")
+
+cor.test(Water_sol_selected[Water_sol_selected$Layer == "1 No",]$S, Water_sol_selected[Water_sol_selected$Layer == "1 No",]$Fe, method = "spearman")
+cor.test(Water_sol_selected[Water_sol_selected$Layer == "2 No",]$S, Water_sol_selected[Water_sol_selected$Layer == "2 No",]$Fe, method = "spearman")
+cor.test(Water_sol_selected[Water_sol_selected$Layer == "2 Yes",]$S, Water_sol_selected[Water_sol_selected$Layer == "2 Yes",]$Fe, method = "spearman")
+cor.test(Water_sol_selected[Water_sol_selected$Layer == "3 Yes",]$S, Water_sol_selected[Water_sol_selected$Layer == "3 Yes",]$Fe, method = "spearman")
+
+
+
+```
+
+###Tables and statistics###
+#THIS is the ANOVA tests for Water sol
+```{r ANOVA}
+
+#ANOVA
+
+write.csv(Water_sol_selected, "Water_sol.csv")
+
+#Log change the values first.
+
+#TO get all the ANOVA p-values, just run this and then change teh element ("Mg" -> "S" -> "Ca", etc. for each desired element. I'm sure you can streamline it somehow, but I don't know how.)
+TukeyHSD(aov(data = Water_sol_selected, log(Cu) ~ Layer))
+
+Acidity
+TukeyHSD(aov(data = Acidity, log(Acidity) ~ Layer))
+
+
+```
+#This is North vs South mann whitney U test
+```{r water sol N vs S}
+
+#MANN WHITNEY U TEST NORTH VS SOUTH
+Site_Sum
+colnames(Site_Sum)[2:4] <- c("Site", "Area", "Area_complex")
+mann_W_test <- left_join(Water_sol_selected[! duplicated(Water_sol_selected),], Site_Sum, by = "Site")
+
+mann_W_test_OZ <- lapply(mann_W_test[mann_W_test$Layer == "1 No",4:17], function(x){
+  wilcox.test(x ~ mann_W_test[mann_W_test$Layer == "1 No",]$Area, exact = FALSE)$p.val
+})
+mann_W_test_TZ <- lapply(mann_W_test[mann_W_test$Layer == "2 No",4:17], function(x){
+  wilcox.test(x ~ mann_W_test[mann_W_test$Layer == "2 No",]$Area, exact = FALSE)$p.val
+})
+mann_W_test_TZ_inc <- lapply(mann_W_test[mann_W_test$Layer == "2 Yes",4:17], function(x){
+  wilcox.test(x ~ mann_W_test[mann_W_test$Layer == "2 Yes",]$Area, exact = FALSE)$p.val
+})
+mann_W_test_RZ <- lapply(mann_W_test[mann_W_test$Layer == "3 Yes",4:17], function(x){
+  wilcox.test(x ~ mann_W_test[mann_W_test$Layer == "3 Yes",]$Area, exact = FALSE)$p.val
+})
+
+mann_W_test_OZ
+mann_W_test_TZ
+mann_W_test_TZ_inc
+mann_W_test_RZ
+
+write.csv(mann_W_test_OZ, "P_values_OZ.csv")
+write.csv(mann_W_test_TZ, "P_values_TZ.csv")
+write.csv(mann_W_test_TZ_inc, "P_values_TZ_inc.csv")
+write.csv(mann_W_test_RZ, "P_values_RZ.csv")
+
+
+```
+#This is summary table for Water sol.
+```{r water soluble TABLE}
+
+Water_tab_sum <- Water_sol_selected[!duplicated(Water_sol_selected),-c(1,2,18)] %>%
+  group_by(Layer)%>%
+  summarise_each(funs(median(., na.rm = TRUE), min(., na.rm=TRUE), max(., na.rm = TRUE)))
+Water_tab_sum
+
+write.csv(Water_tab_sum, "Water_sol_sum.csv")
+
+Acidity_tab_sum <- Acidity[! duplicated(Acidity[,1:4]), -c(1,3,4)] %>%
+  group_by(Layer)%>%
+  summarise_each(funs(median(., na.rm = TRUE), min(., na.rm = TRUE), max(., na.rm = TRUE)))
+Acidity_tab_sum
+
+```
+#Water vs. HCL
+```{r The percentage of water to HCL}
+
+#THe percentage
+
+HCL_upd
+Water <- Water_sol_selected
+Water$Layer <- gsub("1 No", "1", Water$Layer)
+Water$Layer <- gsub("2 No", "2", Water$Layer)
+Water$Layer <- gsub("2 Yes", "2", Water$Layer)
+Water$Layer <- gsub("3 Yes", "3", Water$Layer)
+Water
+HCL_percentage <- within(merge(Water, HCL_upd, by = c("Site", "Triplicate", "Layer")), {
+  Al <- Al.x/Al.y*100
+  As <- As.x/As.y*100
+  Cd <- Cd.x/Cd.y*100
+  Co <- Co.x/Co.y*100
+  Cr <- Cr.x/Cr.y*100
+  Cu <- Cu.x/Cu.y*100
+  Fe <- Fe.x/Fe.y*100
+  Mn <- Mn.x/Mn.y*100
+  Ni <- Ni.x/Ni.y*100
+  Pb <- Pb.x/Pb.y*100
+  S <- S.x/S.y*100
+  Zn <- Zn.x/Zn.y*100
+})[,c("Site", "Triplicate", "Layer", "Treatment", "Al", "As", "Cd", "Co", "Cr", "Cu", "Fe", "Mn", "Ni", "Pb", "S", "Zn")]
+HCL_percentage
+
+#Both water and HCL in the same long dataframe
+WALONG
+HCL_upd
+
+HCLONG <- HCL_upd %>%
+  gather(key = "Element", value = "mgKg", -"Triplicate", -"Site", -"Layer")
+
+WALONG$Layer2 = WALONG$Layer
+WALONG$Layer2 <- gsub("SUL", "1", WALONG$Layer2)
+WALONG$Layer2 <- gsub("TZ \\(inc\\)", "2", WALONG$Layer2)
+WALONG$Layer2 <- gsub("TZ", "2", WALONG$Layer2)
+WALONG$Layer2 <- gsub("HYP", "3", WALONG$Layer2)
+
+colnames(HCLONG)[3] <- "Layer2"
+HCLONG <- left_join(WALONG, HCLONG, by = c("Site", "Triplicate", "Layer2", "Element"))
+HCLONG
+#x = Water, y = HCL
+
+```
+```{r water vs HCL - spearman HCL}
+
+#ALL correlations
+Spearman_HCL <- na.omit(HCLONG)%>%
+  group_by(Layer, Element)%>%
+  summarise(corr_koef = cor.test(mgKg.x, mgKg.y, na.action = "na.exclude", exact = FALSE, method = "spearman")$estimate, P_VAL = cor.test(mgKg.x, mgKg.y, na.action = "na.exclude", exact = FALSE, method = "spearman")$p.val)
+Spearman_HCL
+
+write.csv(Spearman_HCL, "3B_Water_HCL_SPEARMAN.csv")
+
+
+```
+```{r water vs HCL - quantiles}
+HCLONG
+HCL_percentage
+
+HCL_percentage_long <- HCL_percentage %>%
+  gather(key = "Element", value = "Percentage", -"Site", -"Triplicate", -"Layer", -"Treatment")
+HCL_percentage_long
+
+#THis is something
+#quantile(Water_HCL_ZONES_avr[c(Water_HCL_ZONES_avr$Element == "Fe" & Water_HCL_ZONES_avr$Layer == "2 _ Yes"),]$Water_mgKg_mean / Water_HCL_ZONES_avr[c(Water_HCL_ZONES_avr$Element == "Fe" & Water_HCL_ZONES_avr$Layer == "2 _ Yes"),]$HCL_mgKg_mean * 100, na.rm = TRUE)
+
+Water_Quantiles <- HCL_percentage_long[,-c(1,2)]%>%
+  group_by(Layer, Treatment, Element)%>%
+  summarise_each(funs("25q" = quantile(., 0.25, na.rm = TRUE), "50q" = quantile(., 0.50, na.rm = TRUE), "75q" = quantile(., 0.75, na.rm = TRUE)))
+Water_Quantiles
+
+write.csv(Water_Quantiles, "water_HCL_Q.csv")
+
+# See https://stackoverflow.com/questions/11443053/output-of-quantile-to-a-data-frame for possible solution
+
+```
+```{r Water vs HCL}
+
+HCL_upd
+
+#COde changed from previously having HCL_all, to HCL_upd, since the previous didn't have half the detection values, the latter do.
+HCL_OZ_RZ <- subset(na.omit(HCL_upd), Layer %in% c("1", "3"))
+colnames(HCL_OZ_RZ)<- gsub("_HCL", "", colnames(HCL_OZ_RZ))
+HCL_TZ <- subset(na.omit(HCL_upd), Layer %in% "2")
+colnames(HCL_TZ)<- gsub("_HCL", "", colnames(HCL_TZ))
+
+HCL_TZ  
+
+#Make each long, so that you can merge an have two columns
+Water_Long_merge <- Water_CLEAN_OZ_RZ %>%
+  gather(key = Element, value = Water_mgKg, -"Site", -"Triplicate", -"Layer", -"Treatment")
+HCL_Long_merge <- HCL_OZ_RZ %>%
+  gather(key = Element, value = HCL_mgKg, -"Triplicate", -"Site", -"Layer")
+Water_HCL_OZ_RZ <- left_join(Water_Long_merge, HCL_Long_merge, by =c("Triplicate", "Site", "Layer", "Element"))
+
+#And the same with TZ
+Water_CLEAN_TZ
+HCL_TZ
+TZ_Long_water <- na.omit(Water_CLEAN_TZ) %>%
+  gather(key = Element, value = Water_mgKg, -"Site", -"Triplicate", -"Layer", -"Treatment")
+#BUt I need to use average HCL first
+HCL_TZ_average <- HCL_TZ[,-c(1,3)] %>%
+  group_by(Site)%>%
+  summarize_each(funs(mean= mean(., na.rm = TRUE)))
+colnames(HCL_TZ_average) <- gsub("_mean", "", colnames(HCL_TZ_average))
+
+HCL_TZ_average
+
+TZ_Long_HCL <- HCL_TZ_average %>%
+  gather(key = Element, value = HCL_mgKg, -"Site")
+
+
+Water_HCL_TZ <- left_join(TZ_Long_water, TZ_Long_HCL, by = c("Site", "Element"))
+Water_HCL_TZ
+
+Water_HCL_OZ_RZ 
+Water_HCL_TZ
+
+Water_HCL_ZONES <- rbind(Water_HCL_OZ_RZ, Water_HCL_TZ)
+Water_HCL_ZONES$Layer <- paste(Water_HCL_ZONES$Layer, "_", Water_HCL_ZONES$Treatment)
+W_H_Z <- Water_HCL_ZONES[Water_HCL_ZONES$Element %in% c("Al", "As", "B", "Ba", "Be", "Ca", "Cd", "Co", "Cr", "Cu", "Fe", "K", "Mg", "Mn", "Mo", "Na", "Ni", "P", "Pb", "S", "Sr", "U", "V", "Zn"),]
+W_H_Z 
+
+W_H_Z[W_H_Z$Element == "Na",]
+
+
+```
+#Acidity
+```{r Acidity AR S - statistical tests: spearman correlation, t-test and ANOVA}
+
+#Subeset each soil zone into different dataframes to make the statistical tests easier
+Acidity_Aqua_S_RZ <- subset(Acidity_Aqua_S[!duplicated(Acidity_Aqua_S[,c("Site", "Layer", "Triplicate", "Treatment")]),], Layer == "3 _ Incubated")
+Acidity_Aqua_S_TZ_INC <- subset(Acidity_Aqua_S[!duplicated(Acidity_Aqua_S[,c("Site", "Layer", "Triplicate", "Treatment")]),], Layer == "2 _ Incubated")
+Acidity_Aqua_S_TZ_NON <- subset(Acidity_Aqua_S[!duplicated(Acidity_Aqua_S[,c("Site", "Layer", "Triplicate", "Treatment")]),], Layer == "2 _ Non-inc")
+Acidity_Aqua_S_OZ <- subset(Acidity_Aqua_S[!duplicated(Acidity_Aqua_S[,c("Site", "Layer", "Triplicate", "Treatment")]),], Layer == "1 _ Non-inc")
+
+#Paired t-test to see if acidity and sulfur correlate overall
+t.test(Acidity_Aqua_S$Acidity2, Acidity_Aqua_S$Sulfur, exact = FALSE, paired = TRUE)
+
+#Spearman test between aque regia sulfur and acidity for each zone respectively
+cor.test(Acidity_Aqua_S_RZ$Acidity2, Acidity_Aqua_S_RZ$Sulfur, method = "spearman", exact = FALSE)
+cor.test(Acidity_Aqua_S_OZ$Acidity2, Acidity_Aqua_S_OZ$Sulfur, method = "spearman", exact = FALSE)
+cor.test(Acidity_Aqua_S_TZ_INC$Acidity2, Acidity_Aqua_S_TZ_INC$Sulfur, method = "spearman", exact = FALSE)
+cor.test(Acidity_Aqua_S_TZ_NON$Acidity2, Acidity_Aqua_S_TZ_NON$Sulfur, method = "spearman", exact = FALSE)
+
+#ANOVA to see how they groups differ between soil zones
+one_way <- aov(data = Acidity[!duplicated(Acidity[,c("Site", "Layer", "Triplicate", "Treatment")]),], log(Acidity) ~ Layer)
+summary(one_way)
+TukeyHSD(one_way)
+
+```
+```{r Acidity North to south Mann whitney U test}
+
+Acidity_U <- left_join(Acidity, Site_Sum, by = "Site")
+Acidity_U <- Acidity[,-c(3,4,7,8)] %>%
+  group_by(Site, Layer)%>%
+  summarize_each(funs(mean = mean(., na.rm = TRUE)))
+
+Acidity_U <- left_join(Acidity_U, Site_Sum, by = "Site")
+
+Acidity_U_OZ <- subset(Acidity_U, Layer %in% "1 _ Non-inc")
+Acidity_U_TZ <- subset(Acidity_U, Layer %in% "2 _ Non-inc")
+Acidity_U_TZ2 <- subset(Acidity_U, Layer %in% "2 _ Incubated")
+Acidity_U_RZ <- subset(Acidity_U, Layer %in% "3 _ Incubated")
+
+Acidity_U_OZ$Area <- as.factor(Acidity_U_OZ$Area)
+Acidity_U_TZ$Area <- as.factor(Acidity_U_TZ$Area)
+Acidity_U_TZ2$Area <- as.factor(Acidity_U_TZ2$Area)
+Acidity_U_RZ$Area <- as.factor(Acidity_U_RZ$Area)
+
+lapply(Acidity_U_OZ[4], function(x){
+  wilcox.test(x ~ Acidity_U_OZ$Area, exact = FALSE)$p.val
+})
+lapply(Acidity_U_TZ[4], function(x){
+  wilcox.test(x ~ Acidity_U_TZ$Area, exact = FALSE)$p.val
+})
+lapply(Acidity_U_TZ2[4], function(x){
+  wilcox.test(x ~ Acidity_U_TZ2$Area, exact = FALSE)$p.val
+})
+lapply(Acidity_U_RZ[4], function(x){
+  wilcox.test(x ~ Acidity_U_RZ$Area, exact = FALSE)$p.val
+})
+
+
+```
+
+###Other###
+```{r Appendix - AR vs Water sol}
+Aqua
+Aqua_select <- Aqua[-c(1,2,201:223),-c(1,2,4,7,8,51:57)]
+colnames(Aqua_select)[1:4] <- c("Temp", "Site", "Area", "Layer")
+Aqua_select <- separate(Aqua_select, "Temp", into = c("Triplicate", "deletemet"), "_")
+Aqua_select <- separate(Aqua_select, "Triplicate", into = c("deleteme", "Triplicate"), -1)
+Aqua_select <- Aqua_select[,-c(1,3)]
+Aqua_select[,5:45] <- sapply(Aqua_select[,5:45], as.numeric)
+Aqua_select <- Aqua_select[,c("Site", "Triplicate", "Area", "Layer", "Al", "As", "Cd", "Co", "Cr", "Cu", "Fe", "Mn", "Ni", "Pb", "S", "Zn")]
+Aqua_select
+
+Water_AR_compare <- Water_sol_selected
+Water_AR_compare$Layer <- gsub("1 No", "1", Water_AR_compare$Layer)
+Water_AR_compare$Layer <- gsub("2 No", "2", Water_AR_compare$Layer)
+Water_AR_compare$Layer <- gsub("2 Yes", "2", Water_AR_compare$Layer)
+Water_AR_compare$Layer <- gsub("3 Yes", "3", Water_AR_compare$Layer)
+
+ 
+AppendixA <- within(merge(Water_AR_compare, Aqua_select, by=c("Site", "Triplicate", "Layer")), {
+  Al <- Al.x/Al.y*100
+  As <- As.x/As.y*100
+  Cd <- Cd.x/Cd.y*100
+  Co <- Co.x/Co.y*100
+  Cr <- Cr.x/Cr.y*100
+  Cu <- Cu.x/Cu.y*100
+  Fe <- Fe.x/Fe.y*100
+  Mn <- Mn.x/Mn.y*100
+  Ni <- Ni.x/Ni.y*100
+  Pb <- Pb.x/Pb.y*100
+  S <- S.x/S.y*100
+  Zn <- Zn.x/Zn.y*100
+})[,c("Site", "Triplicate", "Layer", "Treatment", "Al", "As", "Cd", "Co", "Cr", "Cu", "Fe", "Mn", "Ni", "Pb", "S", "Zn")]
+write.csv(AppendixA, "Water_sol_vs_AR.csv")
+
+AppendixA <- AppendixA[,-c(1:2)] %>%
+  group_by(Layer, Treatment)%>%
+  summarize_each(funs("25Q" = quantile(., 0.25, na.rm = TRUE), "50Q" = quantile(., 0.50, na.rm = TRUE), "75Q" = quantile(., 0.75, na.rm = TRUE)))
+write.csv(AppendixA, "Water_AR_quantiles.csv")
+
+```
